@@ -3394,7 +3394,7 @@ function refreshBubbleInputs(){
   }
   if(activeBubbleCats.has('pdfs')){
     const s=makeSection('📄 PDFs');
-    s.appendChild(makeFileInput('binp-pdfs-file',true,'.pdf','pdfs'));
+    s.appendChild(makeFileInput('binp-pdfs-file',true,'.pdf,application/pdf','pdfs'));
     area.appendChild(s);
   }
   if(activeBubbleCats.has('gallery')){
@@ -3404,7 +3404,7 @@ function refreshBubbleInputs(){
   }
   if(activeBubbleCats.has('docs')){
     const s=makeSection('📁 FICHIERS (Word, Excel, PowerPoint, ZIP...)');
-    s.appendChild(makeFileInput('binp-docs-file',true,'.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z,.odt,.ods,.odp','docs'));
+    s.appendChild(makeFileInput('binp-docs-file',true,'*/*','docs'));
     area.appendChild(s);
   }
 }
