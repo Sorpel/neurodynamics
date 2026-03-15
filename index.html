@@ -369,6 +369,7 @@ html,body{background:#000;overflow:hidden;width:100%;height:100%}
       <button onclick="toggleBubbleCat('images')" id="bcat-images" style="background:rgba(0,255,255,.06);border:1px solid rgba(0,255,255,.2);color:#0ff;font-family:'Courier New',monospace;font-size:.57rem;letter-spacing:.1em;padding:6px 8px;cursor:pointer;border-radius:4px;text-align:left">🖼 Images</button>
       <button onclick="toggleBubbleCat('videos')" id="bcat-videos" style="background:rgba(0,255,255,.06);border:1px solid rgba(0,255,255,.2);color:#0ff;font-family:'Courier New',monospace;font-size:.57rem;letter-spacing:.1em;padding:6px 8px;cursor:pointer;border-radius:4px;text-align:left">▶ Vidéos</button>
       <button onclick="toggleBubbleCat('pdfs')" id="bcat-pdfs" style="background:rgba(0,255,255,.06);border:1px solid rgba(0,255,255,.2);color:#0ff;font-family:'Courier New',monospace;font-size:.57rem;letter-spacing:.1em;padding:6px 8px;cursor:pointer;border-radius:4px;text-align:left">📄 PDFs</button>
+      <button onclick="toggleBubbleCat('docs')" id="bcat-docs" style="background:rgba(0,255,255,.06);border:1px solid rgba(0,255,255,.2);color:#0ff;font-family:'Courier New',monospace;font-size:.57rem;letter-spacing:.1em;padding:6px 8px;cursor:pointer;border-radius:4px;text-align:left">📁 Fichiers</button>
       <button onclick="toggleBubbleCat('notes')" id="bcat-notes" style="background:rgba(0,255,255,.06);border:1px solid rgba(0,255,255,.2);color:#0ff;font-family:'Courier New',monospace;font-size:.57rem;letter-spacing:.1em;padding:6px 8px;cursor:pointer;border-radius:4px;text-align:left">📝 Notes</button>
       <button onclick="toggleBubbleCat('gallery')" id="bcat-gallery" style="background:rgba(0,255,255,.06);border:1px solid rgba(0,255,255,.2);color:#0ff;font-family:'Courier New',monospace;font-size:.57rem;letter-spacing:.1em;padding:6px 8px;cursor:pointer;border-radius:4px;text-align:left">◈ Galerie</button>
     </div>
@@ -3401,6 +3402,11 @@ function refreshBubbleInputs(){
     s.appendChild(makeFileInput('binp-gallery-file',true,'image/*','gallery'));
     area.appendChild(s);
   }
+  if(activeBubbleCats.has('docs')){
+    const s=makeSection('📁 FICHIERS (Word, Excel, PowerPoint, ZIP...)');
+    s.appendChild(makeFileInput('binp-docs-file',true,'.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt,.csv,.zip,.rar,.7z,.odt,.ods,.odp','docs'));
+    area.appendChild(s);
+  }
 }
 
 async function loadBubbleFiles(input, cat){
@@ -3413,7 +3419,7 @@ async function loadBubbleFiles(input, cat){
   const prev = document.getElementById(inputId + '-preview');
   if(prev) prev.textContent = '⏳ Chargement...';
 
-  const isPdf = cat === 'pdfs';
+  const isPdf = cat === 'pdfs' || cat === 'docs'; // docs = pas de compression
 
   // Lire tous les fichiers en base64
   const loaded = await Promise.all(files.map(f => new Promise((resolve) => {
@@ -3457,7 +3463,18 @@ function collectBubbleContent(){
   if(cats.includes('images'))  content.images  = bubbleFilesMap['images']  || [];
   if(cats.includes('pdfs'))    content.pdfs    = bubbleFilesMap['pdfs']    || [];
   if(cats.includes('gallery')) content.gallery = bubbleFilesMap['gallery'] || [];
+  if(cats.includes('docs'))    content.docs    = bubbleFilesMap['docs']    || [];
   return {cats, content};
+}
+
+// Télécharger un fichier doc depuis une bulle
+function downloadBubbleDoc(btn){
+  const name = decodeURIComponent(btn.dataset.name);
+  const data = decodeURIComponent(btn.dataset.data);
+  const a = document.createElement('a');
+  a.href = data; a.download = name;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
 }
 
 // Sauvegarde les bulles dans localStorage (toujours disponible, même offline)
@@ -3474,6 +3491,7 @@ function saveBubblesLocal(){
         images:  (b.content.images  ||[]).map(i=>({...i, data:''})),
         gallery: (b.content.gallery ||[]).map(i=>({...i, data:''})),
         pdfs:    (b.content.pdfs    ||[]).map(i=>({...i, data:''})),
+        docs:    (b.content.docs    ||[]).map(i=>({...i, data:''})),
       } : {}
     }));
     try { localStorage.setItem('hub_custom_bubbles', JSON.stringify(light)); } catch(e2){}
@@ -3525,6 +3543,7 @@ function updateBubble(){
     if(cats.includes('images') && (!bubbleFilesMap['images']||!bubbleFilesMap['images'].length)) content.images = existing.content?.images || [];
     if(cats.includes('pdfs')   && (!bubbleFilesMap['pdfs']||!bubbleFilesMap['pdfs'].length))   content.pdfs   = existing.content?.pdfs   || [];
     if(cats.includes('gallery')&& (!bubbleFilesMap['gallery']||!bubbleFilesMap['gallery'].length)) content.gallery = existing.content?.gallery || [];
+    if(cats.includes('docs')   && (!bubbleFilesMap['docs']||!bubbleFilesMap['docs'].length))   content.docs   = existing.content?.docs   || [];
 
     customBubbles[idx] = {...customBubbles[idx], label, icon:selectedBubbleIcon, color:selectedBubbleColor, cats, content};
     saveBubblesLocal(); // localStorage immédiat
@@ -3795,6 +3814,15 @@ function renderCustomBubble(sec){
     content.pdfs.forEach((p,i)=>{
       const fid='bub-pdf-'+sec.id.replace(/[^a-z0-9]/gi,'_')+i;
       parts.push('<div style="display:flex;align-items:center;gap:10px;background:'+c+'0a;border:1px solid '+c+'22;border-radius:6px;padding:10px 14px;margin-bottom:8px;flex-wrap:wrap"><span>📄</span><div style="flex:1;'+fmono+';font-size:.72rem;color:'+c+'">'+p.name+'</div><button onclick="toggleBubPdf(\''+fid+'\',\''+fid+'_data\')" style="background:'+c+'18;border:1px solid '+c+'44;color:'+c+';'+fmono+';font-size:.55rem;padding:4px 9px;cursor:pointer;border-radius:3px">👁 APERÇU</button><a href="'+p.data+'" download="'+p.name+'" style="background:'+c+'18;border:1px solid '+c+'44;color:'+c+';'+fmono+';font-size:.55rem;padding:4px 9px;border-radius:3px;text-decoration:none">↓ DL</a></div><iframe id="'+fid+'" style="display:none;width:100%;height:65vh;border:1px solid '+c+'22;border-radius:6px;background:#fff;margin-bottom:8px"></iframe><span id="'+fid+'_data" style="display:none">'+encodeURIComponent(p.data)+'</span>');
+    });
+    parts.push('</div>');
+  }
+  if(cats.includes('docs')&&content.docs&&content.docs.length){
+    parts.push('<div style="margin-bottom:22px">'+secTitle('📁 FICHIERS'));
+    content.docs.forEach((f,i)=>{
+      const ext = (f.name||'').split('.').pop().toLowerCase();
+      const icon = ext==='docx'||ext==='doc'?'📝':ext==='xlsx'||ext==='xls'?'📊':ext==='pptx'||ext==='ppt'?'📋':ext==='zip'||ext==='rar'||ext==='7z'?'🗜':ext==='txt'||ext==='csv'?'📄':'📁';
+      parts.push('<div style="display:flex;align-items:center;gap:10px;background:'+c+'0a;border:1px solid '+c+'22;border-radius:6px;padding:10px 14px;margin-bottom:8px;flex-wrap:wrap"><span style="font-size:1.2rem">'+icon+'</span><div style="flex:1;'+fmono+';font-size:.72rem;color:'+c+'">'+f.name+'</div><button onclick="downloadBubbleDoc(this)" data-name="'+encodeURIComponent(f.name)+'" data-data="'+encodeURIComponent(f.data)+'" style="background:'+c+'18;border:1px solid '+c+'44;color:'+c+';'+fmono+';font-size:.55rem;padding:4px 9px;cursor:pointer;border-radius:3px">↓ TÉLÉCHARGER</button></div>');
     });
     parts.push('</div>');
   }
