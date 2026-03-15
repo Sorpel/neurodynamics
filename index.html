@@ -658,11 +658,12 @@ async function loadCloudData(){
       const d = rows[0];
       const parse = (v, fallback=[]) => { try{ return v ? JSON.parse(v) : fallback; }catch{ return fallback; } };
 
-      // Bulles custom
+      // Bulles custom — cloud gagne SEULEMENT si non vide
       const cb = parse(d.custom_bubbles);
       if(cb.length) customBubbles = cb;
+      // sinon garder customBubbles du localStorage (déjà chargé ligne 2733)
 
-      // Données texte → localStorage
+      // Données texte → localStorage seulement si non vides
       const sets = [
         ['hub_sites',          d.sites],
         ['hub_ideas',          d.ideas],
@@ -670,12 +671,15 @@ async function loadCloudData(){
         ['hub_recipes',        d.recipes],
         ['hub_custom_bubbles', d.custom_bubbles],
       ];
-      sets.forEach(([key, val])=>{ if(val) localStorage.setItem(key, val); });
+      sets.forEach(([key, val])=>{
+        if(val && val !== '[]' && val !== 'null') localStorage.setItem(key, val);
+      });
 
-      // Photos — toujours écraser avec les données cloud
+      // Photos — cloud gagne SEULEMENT si non vide
       const cloudPhotos = parse(d.photos, []);
-      photoData = cloudPhotos; // même si vide, on fait confiance au cloud
-      // Rafraîchir l'affichage si la section est déjà ouverte
+      if(cloudPhotos.length) photoData = cloudPhotos;
+      // sinon garder photoData actuel
+
       if(document.getElementById('photo-grid')) renderPhotos();
       if(photoPlanetActive) initPhotoPlanet();
     }
@@ -2593,7 +2597,12 @@ function togglePhotoView(mode){
 function handlePhotoInput(e){ [...e.target.files].forEach(uploadAndAddPhoto); }
 function handlePhotoDrop(e){ e.preventDefault(); e.stopPropagation(); document.getElementById('photo-drop').style.borderColor='rgba(0,255,255,.3)'; [...e.dataTransfer.files].filter(f=>f.type.startsWith('image/')).forEach(uploadAndAddPhoto); }
 function addPhoto(file){ uploadAndAddPhoto(file); }
-function deletePhoto(i){ photoData.splice(i,1); renderPhotos(); if(photoPlanetActive)initPhotoPlanet(); }
+function deletePhoto(i){
+  photoData.splice(i,1);
+  renderPhotos();
+  if(photoPlanetActive) initPhotoPlanet();
+  saveCloudData(); // ← sauvegarder la suppression dans Supabase
+}
 function deleteCurrentPhoto(){ deletePhoto(lightboxIdx); if(lightboxIdx>=photoData.length)lightboxIdx=Math.max(0,photoData.length-1); if(photoData.length===0){closeLightbox();}else{openLightbox(lightboxIdx);} }
 function openLightbox(i){ lightboxIdx=i; const lb=document.getElementById('photo-lightbox'); lb.style.display='flex'; document.getElementById('lightbox-img').src=photoData[i]; document.getElementById('lightbox-idx').textContent=`${i+1} / ${photoData.length}`; }
 function closeLightbox(){ document.getElementById('photo-lightbox').style.display='none'; }
@@ -2892,25 +2901,47 @@ function refreshBubbleInputs(){
   }
 }
 
-async function loadBubbleFiles(input,cat){
-  bubbleFilesMap[cat]=[];
-  const files=[...input.files];
+async function loadBubbleFiles(input, cat){
+  bubbleFilesMap[cat] = [];
+  const files = [...input.files];
   if(!files.length) return;
-  const isImage = cat==='images'||cat==='gallery';
-  if(isImage){
-    bubbleFilesMap[cat] = await uploadBubbleFilesToStorage(files, cat);
+
+  const prev = document.getElementById('binp-'+cat+'-file-preview');
+  if(prev) prev.textContent = '⏳ Chargement...';
+
+  const isPdf = cat === 'pdfs';
+
+  // Lire tous les fichiers en base64
+  const loaded = await Promise.all(files.map(f => new Promise((resolve) => {
+    const r = new FileReader();
+    r.onload = ev => resolve({ name: f.name, data: ev.target.result, type: f.type });
+    r.onerror = () => resolve(null);
+    r.readAsDataURL(f);
+  })));
+
+  const validFiles = loaded.filter(Boolean);
+
+  // Pour les images : compresser
+  if(!isPdf){
+    const compressed = await Promise.all(validFiles.map(f => new Promise(resolve => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        let w = img.width, h = img.height, max = 600;
+        if(w > max || h > max){ if(w>h){h=Math.round(h*max/w);w=max;}else{w=Math.round(w*max/h);h=max;} }
+        canvas.width = w; canvas.height = h;
+        canvas.getContext('2d').drawImage(img,0,0,w,h);
+        resolve({ name: f.name, data: canvas.toDataURL('image/jpeg', 0.78), type: 'image/jpeg' });
+      };
+      img.onerror = () => resolve(f); // fallback sans compression
+      img.src = f.data;
+    })));
+    bubbleFilesMap[cat] = compressed;
   } else {
-    // PDFs → base64 local (les PDFs ne peuvent pas être uploadés sur le bucket images)
-    let loaded=0;
-    files.forEach(f=>{
-      const r=new FileReader();
-      r.onload=ev=>{ bubbleFilesMap[cat].push({name:f.name,data:ev.target.result,type:f.type}); loaded++; if(loaded===files.length){ const prev=document.getElementById('binp-'+cat+'-file-preview'); if(prev)prev.textContent=files.length+' fichier(s) chargé(s)'; } };
-      r.readAsDataURL(f);
-    });
-    return;
+    bubbleFilesMap[cat] = validFiles;
   }
-  const prev=document.getElementById('binp-'+cat+'-file-preview');
-  if(prev) prev.textContent=files.length+' fichier(s) uploadé(s) ✓';
+
+  if(prev) prev.textContent = bubbleFilesMap[cat].length + ' fichier(s) chargé(s) ✓';
 }
 
 function collectBubbleContent(){
