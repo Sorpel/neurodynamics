@@ -7,6 +7,7 @@
 <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
+html{font-size:20px} /* base augmentée — tous les rem s'agrandissent proportionnellement */
 html,body{background:#000;overflow:hidden;width:100%;height:100%}
 #w{position:fixed;top:0;left:0;width:100%;height:100%;background:#000;overflow:hidden}
 #c{display:block;width:100%;height:100%;touch-action:none}
@@ -1672,9 +1673,9 @@ function isVisibleForRole(id){
   return !hiddenFromVisitor.has(id);
 }
 
-// Filtre les sections visibles selon le rôle
+// Filtre les sections visibles selon le rôle — AISA est toujours intérieure
 function getVisibleSections(){
-  return HUB_SECTIONS.filter(s => isVisibleForRole(s.id));
+  return HUB_SECTIONS.filter(s => s.id !== 'aisa' && isVisibleForRole(s.id));
 }
 
 // ══════════════════════════════════════════════
@@ -1989,9 +1990,11 @@ function initHub(){
   loadCloudData().then(()=>{
     buildHubIcons();
     loadCustomBubbles();
+    initInnerSections();
   }).catch(()=>{
     buildHubIcons();
     loadCustomBubbles();
+    initInnerSections();
   });
 
   setTimeout(()=>{
@@ -2044,6 +2047,28 @@ function buildHubStars(){
 
 // Groupe central qui tourne lentement
 let centralGroup;
+// ── Zone intérieure ──
+let sphereMesh = null;         // mesh cliquable de la sphère
+let sphereUnlocked = false;    // déverrouillée par code ou admin
+let insideSphere = false;      // caméra à l'intérieur
+let innerIcons = [];           // bulles intérieures
+let hubCamTargetPos = null;    // position cible pour animation caméra
+let hubCamTargetLook = null;   // point cible regardé
+const INNER_SECTIONS = [];     // sections privées intérieures
+
+// ── Sections intérieures — AISA + bulles privées ──
+function initInnerSections(){
+  // AISA est toujours ici
+  const aisaSec = HUB_SECTIONS.find(s=>s.id==='aisa');
+  if(aisaSec && !INNER_SECTIONS.find(s=>s.id==='aisa')) INNER_SECTIONS.push(aisaSec);
+  // Bulles custom marquées 'inner' (isInner:true)
+  customBubbles.filter(b=>b.isInner).forEach(b=>{
+    if(!INNER_SECTIONS.find(s=>s.id===b.id)){
+      const sec={...b, render:()=>renderCustomBubble(sec)};
+      INNER_SECTIONS.push(sec);
+    }
+  });
+}
 
 function buildHubPlanet(){
   centralGroup = new THREE.Group();
@@ -2061,7 +2086,7 @@ function buildHubPlanet(){
     pos3.push(r*Math.sin(phi)*Math.cos(theta), r*Math.sin(phi)*Math.sin(theta), r*Math.cos(phi));
   }
 
-  // 3 couches : grands brillants, moyens, petits — tailles et opacités augmentées
+  // 3 couches : grands brillants, moyens, petits
   [[6, 0.38, 1.0], [18, 0.18, 0.90], [N-24, 0.09, 0.65]].forEach(([cnt, sz, op], li)=>{
     const p = []; const start = li===0 ? 0 : li===1 ? 6 : 24;
     for(let i=start; i<start+cnt && i<N; i++) p.push(pos3[i*3], pos3[i*3+1], pos3[i*3+2]);
@@ -2074,14 +2099,13 @@ function buildHubPlanet(){
     })));
   });
 
-  // Lignes de connexion entre points proches — comme l'intro
+  // Lignes de connexion
   const lp=[];
-  const CONNECT_DIST = R * 0.72;
   for(let i=0;i<N;i++){
     const ax=pos3[i*3], ay=pos3[i*3+1], az=pos3[i*3+2];
     for(let j=i+1;j<N;j++){
       const d=Math.sqrt((ax-pos3[j*3])**2+(ay-pos3[j*3+1])**2+(az-pos3[j*3+2])**2);
-      if(d<CONNECT_DIST) lp.push(ax,ay,az,pos3[j*3],pos3[j*3+1],pos3[j*3+2]);
+      if(d<R*0.72) lp.push(ax,ay,az,pos3[j*3],pos3[j*3+1],pos3[j*3+2]);
     }
   }
   if(lp.length){
@@ -2090,14 +2114,338 @@ function buildHubPlanet(){
     centralGroup.add(new THREE.LineSegments(lg, new THREE.LineBasicMaterial({color:0x0099bb, transparent:true, opacity:0.28})));
   }
 
-  // Anneau équatorial fin
+  // Anneau équatorial
   const ringPts=[];
   for(let i=0;i<=96;i++){ const a=(i/96)*Math.PI*2; ringPts.push(Math.cos(a)*R*1.12, 0, Math.sin(a)*R*1.12); }
   const rg=new THREE.BufferGeometry(); rg.setAttribute('position',new THREE.BufferAttribute(new Float32Array(ringPts),3));
   hubScene.add(new THREE.Line(rg, new THREE.LineBasicMaterial({color:0x00ccdd, transparent:true, opacity:0.28})));
 
+  // ── Sphère invisible cliquable (plus grande que les points) ──
+  const sGeo = new THREE.SphereGeometry(R*1.15, 24, 24);
+  const sMat = new THREE.MeshBasicMaterial({
+    color: isAdmin() ? 0x0033ff : 0xff2200,
+    transparent:true, opacity:0.0, // invisible mais cliquable
+    side: THREE.FrontSide
+  });
+  sphereMesh = new THREE.Mesh(sGeo, sMat);
+  sphereMesh.userData = { isSphere: true };
+  hubScene.add(sphereMesh);
+
+  // Halo coloré visible (fin, juste pour indiquer l'état)
+  const haloGeo = new THREE.SphereGeometry(R*1.18, 20, 20);
+  const haloMat = new THREE.MeshBasicMaterial({
+    color: isAdmin() ? 0x0055ff : 0xff3300,
+    transparent:true, opacity:0.04,
+    side: THREE.BackSide,
+    wireframe: false
+  });
+  const haloMesh = new THREE.Mesh(haloGeo, haloMat);
+  haloMesh.userData = { isHalo:true };
+  hubScene.add(haloMesh);
+
+  sphereUnlocked = isAdmin(); // admin toujours déverrouillé
+
   hubScene.add(new THREE.AmbientLight(0x001133, 1.0));
 }
+
+// ── Tenter de déverrouiller la sphère ──
+function tryUnlockSphere(){
+  if(sphereUnlocked){ enterSphere(); return; }
+  // Overlay de saisie du code
+  const ov = document.createElement('div');
+  ov.id='sphere-lock-overlay';
+  ov.style.cssText='position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,.8);z-index:500;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:16px';
+  ov.innerHTML=`
+    <div style="font-family:'Courier New',monospace;font-size:.7rem;color:rgba(255,40,40,.7);letter-spacing:.4em">◈ ZONE SÉCURISÉE</div>
+    <div style="font-family:'Courier New',monospace;font-size:.55rem;color:rgba(255,255,255,.4);letter-spacing:.25em">ENTREZ LE CODE D'ACCÈS</div>
+    <input id="sphere-code-inp" type="password" maxlength="10"
+      style="background:rgba(255,30,30,.08);border:1px solid rgba(255,40,40,.4);border-radius:4px;color:#f66;font-family:'Courier New',monospace;font-size:1.2rem;letter-spacing:.5em;padding:10px 18px;outline:none;text-align:center;width:200px"
+      autofocus>
+    <div id="sphere-code-err" style="font-family:'Courier New',monospace;font-size:.5rem;color:rgba(255,60,60,.6);letter-spacing:.2em;min-height:16px"></div>
+    <div style="display:flex;gap:10px">
+      <button onclick="checkSphereCode()" style="background:rgba(255,40,40,.12);border:1px solid rgba(255,40,40,.35);color:#f66;font-family:'Courier New',monospace;font-size:.6rem;letter-spacing:.2em;padding:8px 18px;cursor:pointer;border-radius:4px">ENTRER</button>
+      <button onclick="document.getElementById('sphere-lock-overlay').remove()" style="background:transparent;border:1px solid rgba(255,255,255,.12);color:rgba(255,255,255,.35);font-family:'Courier New',monospace;font-size:.6rem;padding:8px 14px;cursor:pointer;border-radius:4px">ANNULER</button>
+    </div>`;
+  document.body.appendChild(ov);
+  setTimeout(()=>{ const inp=document.getElementById('sphere-code-inp'); if(inp){ inp.focus(); inp.addEventListener('keydown',e=>{ if(e.key==='Enter') checkSphereCode(); }); } }, 50);
+}
+
+function checkSphereCode(){
+  const inp = document.getElementById('sphere-code-inp');
+  if(!inp) return;
+  if(inp.value === '2009'){
+    sphereUnlocked = true;
+    // Passer le halo et la sphère en bleu
+    hubScene.children.forEach(c=>{
+      if(c.userData && c.userData.isHalo) c.material.color.setHex(0x0055ff);
+    });
+    if(sphereMesh) sphereMesh.material.color.setHex(0x0033ff);
+    document.getElementById('sphere-lock-overlay').remove();
+    enterSphere();
+  } else {
+    const err = document.getElementById('sphere-code-err');
+    if(err){ err.textContent='⚠ CODE INCORRECT'; setTimeout(()=>{ err.textContent=''; },1500); }
+    inp.value=''; inp.focus();
+  }
+}
+
+// ── Entrer dans la sphère ──
+function enterSphere(){
+  if(insideSphere) return;
+  insideSphere = true;
+
+  // Cacher les icônes extérieures
+  hubIcons.forEach(sp=>{
+    if(!sp||!sp.userData) return;
+    sp.userData._wasVisible = sp.material.opacity;
+    sp.material.opacity = 0;
+    sp.userData._frozen = true;
+  });
+
+  // Son déverrouillage / entrée
+  if(actx){
+    const now = actx.currentTime;
+    // Sweep montant cyberpunk
+    [200,400,800,1600].forEach((f,i)=>{
+      const o=actx.createOscillator(), g=actx.createGain();
+      o.type='sine'; o.frequency.setValueAtTime(f,now+i*0.08);
+      o.frequency.exponentialRampToValueAtTime(f*2, now+i*0.08+0.15);
+      g.gain.setValueAtTime(0,now+i*0.08); g.gain.linearRampToValueAtTime(0.18,now+i*0.08+0.04);
+      g.gain.exponentialRampToValueAtTime(0.0001,now+i*0.08+0.3);
+      o.connect(g); g.connect(masterGain); o.start(now+i*0.08); o.stop(now+i*0.08+0.35);
+    });
+    // Drone grave d'entrée
+    const sub=actx.createOscillator(), subG=actx.createGain();
+    sub.type='sine'; sub.frequency.setValueAtTime(60,now); sub.frequency.linearRampToValueAtTime(120,now+1.5);
+    subG.gain.setValueAtTime(0,now); subG.gain.linearRampToValueAtTime(0.25,now+0.3);
+    subG.gain.exponentialRampToValueAtTime(0.0001,now+2.0);
+    sub.connect(subG); subG.connect(masterGain); sub.start(now); sub.stop(now+2.1);
+  }
+
+  // Bouton retour
+  let backBtn = document.getElementById('sphere-back-btn');
+  if(!backBtn){
+    backBtn = document.createElement('button');
+    backBtn.id = 'sphere-back-btn';
+    backBtn.textContent = '← SORTIR';
+    backBtn.style.cssText = "position:absolute;top:clamp(50px,8vh,70px);left:50%;transform:translateX(-50%);z-index:30;background:rgba(0,60,255,.12);border:1px solid rgba(0,100,255,.4);color:#66aaff;font-family:'Courier New',monospace;font-size:.65rem;letter-spacing:.25em;padding:7px 20px;cursor:pointer;border-radius:4px;display:none";
+    backBtn.onclick = exitSphere;
+    document.getElementById('hub').appendChild(backBtn);
+  }
+
+  // Titre zone
+  let zoneTitle = document.getElementById('sphere-zone-title');
+  if(!zoneTitle){
+    zoneTitle = document.createElement('div');
+    zoneTitle.id = 'sphere-zone-title';
+    zoneTitle.style.cssText = "position:absolute;top:clamp(90px,12vh,110px);left:50%;transform:translateX(-50%);z-index:30;font-family:'Courier New',monospace;font-size:.55rem;letter-spacing:.45em;color:rgba(0,150,255,.6);pointer-events:none;white-space:nowrap;display:none";
+    zoneTitle.textContent = '◈ ZONE PRIVÉE · NIVEAU 2009';
+    document.getElementById('hub').appendChild(zoneTitle);
+  }
+
+  // Changer le bouton + BULLE → + BULLE PRIVÉE
+  const addBtn = document.getElementById('hub-add-btn');
+  if(addBtn){
+    addBtn.textContent = '+ BULLE PRIVÉE';
+    addBtn.style.borderColor = 'rgba(0,120,255,.4)';
+    addBtn.style.color = '#66aaff';
+    addBtn.style.background = 'rgba(0,60,255,.08)';
+  }
+
+  // Construire les bulles intérieures d'abord
+  buildInnerIcons();
+
+  // Animation : caméra plonge de l'extérieur (r~24) vers l'intérieur (r=8)
+  // r=8 = suffisamment près pour voir les bulles à r=3.5 mais pas collé dessus
+  const startPos = hubCamera.position.clone();
+  const endPos = new THREE.Vector3(0, 0, 8);
+  let t = 0;
+  const diveAnim = setInterval(()=>{
+    t = Math.min(t + 0.018, 1);
+    const ease = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2;
+    hubCamera.position.lerpVectors(startPos, endPos, ease);
+    hubCamera.lookAt(0, 0, 0);
+    // Points virent au bleu progressivement
+    if(centralGroup) centralGroup.children.forEach(c=>{
+      if(c.material && c.material.color) c.material.color.lerp(new THREE.Color(0x0044ff), 0.04);
+    });
+    if(t >= 1){
+      clearInterval(diveAnim);
+      backBtn.style.display = 'block';
+      zoneTitle.style.display = 'block';
+    }
+  }, 16);
+}
+
+// ── Sortir de la sphère ──
+function exitSphere(){
+  if(!insideSphere) return;
+  insideSphere = false;
+
+  // Son de sortie
+  if(actx){
+    const now = actx.currentTime;
+    [1600,800,400,200].forEach((f,i)=>{
+      const o=actx.createOscillator(), g=actx.createGain();
+      o.type='sine'; o.frequency.setValueAtTime(f,now+i*0.07);
+      o.frequency.exponentialRampToValueAtTime(f*0.5, now+i*0.07+0.12);
+      g.gain.setValueAtTime(0.14,now+i*0.07); g.gain.exponentialRampToValueAtTime(0.0001,now+i*0.07+0.25);
+      o.connect(g); g.connect(masterGain); o.start(now+i*0.07); o.stop(now+i*0.07+0.3);
+    });
+  }
+
+  // Supprimer bulles intérieures
+  innerIcons.forEach(sp=>{ if(hubScene) hubScene.remove(sp); });
+  innerIcons = [];
+
+  const btn = document.getElementById('sphere-back-btn');
+  const title = document.getElementById('sphere-zone-title');
+  if(btn) btn.style.display = 'none';
+  if(title) title.style.display = 'none';
+
+  // Remettre le bouton + BULLE normal
+  const addBtn = document.getElementById('hub-add-btn');
+  if(addBtn){
+    addBtn.textContent = '+ BULLE';
+    addBtn.style.borderColor = 'rgba(0,255,255,.3)';
+    addBtn.style.color = '#0ff';
+    addBtn.style.background = 'rgba(0,255,255,.08)';
+  }
+
+  // Caméra remonte à l'extérieur
+  const startPos = hubCamera.position.clone();
+  const endPos = new THREE.Vector3(0, 20, 24);
+  let t = 0;
+  const outAnim = setInterval(()=>{
+    t = Math.min(t + 0.018, 1);
+    const ease = t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t+2, 2)/2;
+    hubCamera.position.lerpVectors(startPos, endPos, ease);
+    hubCamera.lookAt(0, 0, 0);
+    if(centralGroup) centralGroup.children.forEach(c=>{
+      if(c.material && c.material.color) c.material.color.lerp(new THREE.Color(0x00eeff), 0.05);
+    });
+    if(t >= 1){
+      clearInterval(outAnim);
+      hubIcons.forEach(sp=>{ if(!sp||!sp.userData) return; sp.userData._frozen=false; sp.material.opacity=sp.userData._wasVisible||0.88; });
+    }
+  }, 16);
+}
+
+// ── Bulles intérieures ──
+function buildInnerIcons(){
+  innerIcons.forEach(sp=>{ if(hubScene) hubScene.remove(sp); });
+  innerIcons = [];
+
+  initInnerSections();
+  const secs = INNER_SECTIONS;
+  if(!secs.length){ console.log('[inner] INNER_SECTIONS vide'); return; }
+  console.log('[inner] building', secs.length, 'bulles:', secs.map(s=>s.id));
+
+  const R_INNER = 4.5; // rayon plus grand = bulles plus espacées et moins grosses à l'écran
+
+  secs.forEach((sec, k)=>{
+    const angle = (k / secs.length) * Math.PI * 2;
+    const elev  = Math.sin(k * 1.3) * 0.6;
+
+    // Canvas sprite
+    const S = 256;
+    const cc = document.createElement('canvas');
+    cc.width = S; cc.height = S;
+    const cx = cc.getContext('2d');
+    cx.clearRect(0, 0, S, S);
+    const cx0 = S/2, cy0 = S/2 - 10, hexR = 100;
+    const col = sec.color || '#00ffcc';
+
+    // Hexagone
+    cx.save(); cx.translate(cx0, cy0);
+    cx.beginPath();
+    for(let j=0;j<6;j++){
+      const a = j*Math.PI/3 + Math.PI/6;
+      j===0 ? cx.moveTo(Math.cos(a)*hexR, Math.sin(a)*hexR)
+             : cx.lineTo(Math.cos(a)*hexR, Math.sin(a)*hexR);
+    }
+    cx.closePath();
+    cx.fillStyle = 'rgba(0,5,30,0.97)'; cx.fill();
+    cx.shadowColor = col; cx.shadowBlur = 24;
+    cx.strokeStyle = col + 'cc'; cx.lineWidth = 2.5; cx.stroke();
+    cx.shadowBlur = 0;
+    // Lignes circuit
+    for(let j=0;j<6;j++){
+      const a = j*Math.PI/3 + Math.PI/6;
+      cx.strokeStyle = col+'30'; cx.lineWidth = 0.8;
+      cx.beginPath(); cx.moveTo(0,0); cx.lineTo(Math.cos(a)*hexR*.8, Math.sin(a)*hexR*.8); cx.stroke();
+    }
+    cx.restore();
+
+    // Icône
+    cx.save();
+    if(sec.id === 'aisa'){
+      for(let p=0;p<8;p++){
+        const ag = (p/8)*Math.PI*2;
+        cx.save(); cx.translate(cx0, cy0); cx.rotate(ag);
+        const grad = cx.createLinearGradient(0,-38,0,0);
+        grad.addColorStop(0,'#00d4a0'); grad.addColorStop(1,'#8bdd30');
+        cx.fillStyle = grad; cx.globalAlpha = 0.85 - p*0.04;
+        cx.beginPath(); cx.moveTo(0,0);
+        cx.bezierCurveTo(-10,-15,-8,-35,0,-38);
+        cx.bezierCurveTo(8,-35,12,-20,6,-10);
+        cx.closePath(); cx.fill(); cx.restore();
+      }
+    } else {
+      cx.font = '56px serif';
+      cx.textAlign = 'center'; cx.textBaseline = 'middle';
+      cx.shadowColor = col; cx.shadowBlur = 24; cx.fillStyle = '#fff';
+      cx.fillText(sec.icon || '⬡', cx0, cy0);
+    }
+    cx.shadowBlur = 0; cx.restore();
+
+    // Label
+    cx.font = 'bold 18px "Courier New",monospace';
+    cx.textAlign = 'center'; cx.textBaseline = 'alphabetic';
+    cx.fillStyle = col + 'ee'; cx.shadowColor = col; cx.shadowBlur = 7;
+    cx.fillText((sec.label||sec.id).toUpperCase(), cx0, cy0 + hexR + 24);
+    cx.shadowBlur = 0;
+
+    const tex = new THREE.CanvasTexture(cc);
+    const mat = new THREE.SpriteMaterial({
+      map: tex,
+      transparent: true,
+      depthTest: false,
+      depthWrite: false,
+      opacity: 0
+    });
+    const sprite = new THREE.Sprite(mat);
+    const BASE_SCALE = 2.2; // taille réduite
+    sprite.scale.set(BASE_SCALE, BASE_SCALE, 1);
+    sprite.position.set(
+      R_INNER * Math.cos(angle),
+      elev,
+      R_INNER * Math.sin(angle)
+    );
+    sprite.userData = {
+      id: sec.id,
+      orbitR: R_INNER,
+      angle,
+      elev,
+      baseScale: BASE_SCALE,
+      color: col,
+      label: sec.label || sec.id,
+      inner: true
+    };
+    hubScene.add(sprite);
+    innerIcons.push(sprite);
+
+    // Fade in
+    let tf = 0;
+    const fadeIn = setInterval(()=>{
+      tf = Math.min(tf + 0.03, 1);
+      sprite.material.opacity = tf * 0.95;
+      if(tf >= 1) clearInterval(fadeIn);
+    }, 16);
+  });
+  console.log('[inner] sprites créés:', innerIcons.length);
+}
+
 
 function addAngularRing(parent, radius, segments, color, opacity, rx, ry, rz){
   const pts=[];
@@ -2218,18 +2566,18 @@ function buildHubIcons(){
           cx.restore();
         }
       } else {
-        cx.font='44px serif'; cx.textAlign='center'; cx.textBaseline='middle';
+        cx.font='52px serif'; cx.textAlign='center'; cx.textBaseline='middle';
         cx.shadowColor=sec.color; cx.shadowBlur=20; cx.fillStyle='#fff';
         cx.fillText(sec.icon, cx0, cy0);
       }
       cx.shadowBlur=0; cx.restore();
 
       // Label
-      cx.font='bold 13px "Courier New",monospace';
+      cx.font='bold 17px "Courier New",monospace';
       cx.textAlign='center'; cx.textBaseline='alphabetic';
       cx.fillStyle=sec.color+'dd';
       cx.shadowColor=sec.color; cx.shadowBlur=5;
-      cx.fillText(sec.label.toUpperCase(), cx0, cy0+hexR+20);
+      cx.fillText(sec.label.toUpperCase(), cx0, cy0+hexR+22);
       cx.shadowBlur=0;
 
       // Indicateur masqué admin
@@ -2286,8 +2634,23 @@ function hubResize(){ const hc=document.getElementById('hub-c'); const W=hc.clie
 
 function hubCheckClick(){
   hubRaycaster.setFromCamera(hubMouse, hubCamera);
-  const hits = hubRaycaster.intersectObjects(hubIcons);
-  if(hits.length>0) openSection(hits[0].object.userData.id, hits[0].object);
+
+  if(insideSphere){
+    // À l'intérieur — cliquer sur les bulles intérieures
+    const hits = hubRaycaster.intersectObjects(innerIcons);
+    if(hits.length>0) openSection(hits[0].object.userData.id, hits[0].object);
+    return;
+  }
+
+  // À l'extérieur — cliquer bulles OU sphère centrale
+  const hits = hubRaycaster.intersectObjects(hubIcons.filter(s=>s&&s.userData));
+  if(hits.length>0){ openSection(hits[0].object.userData.id, hits[0].object); return; }
+
+  // Tester le clic sur la sphère centrale
+  if(sphereMesh){
+    const sphereHits = hubRaycaster.intersectObject(sphereMesh);
+    if(sphereHits.length>0) tryUnlockSphere();
+  }
 }
 
 let hubT=0;
@@ -2309,11 +2672,10 @@ function hubLoop(){
     centralGroup.rotation.x += 0.001;
   }
 
-  // ── Icônes en anneaux ──
+  // ── Icônes en anneaux extérieurs ──
   const cosR=Math.cos(hubRotGlobal), sinR=Math.sin(hubRotGlobal);
   const tiltX = hubRotX*0.4;
-  // Filtrer les sprites valides (userData défini)
-  const validIcons = hubIcons.filter(sp => sp && sp.userData);
+  const validIcons = hubIcons.filter(sp => sp && sp.userData && !sp.userData._frozen);
   validIcons.forEach(sp=>{
     const d = sp.userData;
     d.angle += 0.0018;
@@ -2324,17 +2686,45 @@ function hubLoop(){
     sp.position.set(rx, rz*Math.sin(tiltX), rz*Math.cos(tiltX));
   });
 
+  // ── Icônes intérieures — rotation lente autour du centre ──
+  if(insideSphere){
+    // Caméra orbite à r=8 pour avoir une bonne vue des bulles à r=3.5
+    const camAngle = hubT * 0.25 + hubRotGlobal;
+    hubCamera.position.set(
+      Math.cos(camAngle) * 8,
+      Math.sin(hubT * 0.08) * 1.5,
+      Math.sin(camAngle) * 8
+    );
+    hubCamera.lookAt(0, 0, 0);
+
+    innerIcons.forEach(sp=>{
+      if(!sp||!sp.userData) return;
+      sp.userData.angle += 0.004;
+      const d = sp.userData;
+      sp.position.set(
+        d.orbitR * Math.cos(d.angle),
+        d.elev,
+        d.orbitR * Math.sin(d.angle)
+      );
+    });
+  }
+
   // ── Hover ──
   try {
     hubRaycaster.setFromCamera(hubMouse, hubCamera);
-    const hits = hubRaycaster.intersectObjects(validIcons);
+    const activeIcons = insideSphere ? innerIcons.filter(s=>s&&s.userData) : validIcons;
+    const hits = hubRaycaster.intersectObjects(activeIcons);
+    // Hover sphère centrale (seulement quand à l'extérieur)
+    const sphereHover = !insideSphere && sphereMesh && hubRaycaster.intersectObject(sphereMesh).length>0;
     const hc = document.getElementById('hub-c');
-    if(hc) hc.style.cursor = hits.length>0 ? 'pointer':'default';
-    validIcons.forEach(sp=>{
+    if(hc) hc.style.cursor = (hits.length>0||sphereHover) ? 'pointer':'default';
+    // Halo sphère au survol
+    if(sphereMesh) sphereMesh.material.opacity = sphereHover ? 0.08 : 0.0;
+    activeIcons.forEach(sp=>{
       const isHit = hits.length>0 && hits[0].object===sp;
       const target = isHit ? sp.userData.baseScale*1.4 : sp.userData.baseScale;
       sp.scale.lerp(new THREE.Vector3(target,target,1), 0.12);
-      sp.material.opacity = isHit ? 1.0 : 0.88;
+      if(!sp.userData._frozen) sp.material.opacity = isHit ? 1.0 : 0.88;
     });
   } catch(e){}
 
@@ -2343,22 +2733,27 @@ function hubLoop(){
 }
 
 function openSection(id, sprite){
-  const sec = HUB_SECTIONS.find(s=>s.id===id);
-  if(!sec) return;
-  const startScale = sprite.scale.x;
-  let t=0;
-  const anim = setInterval(()=>{
-    t+=0.06;
-    sprite.scale.set(startScale*(1+t*3), startScale*(1+t*3), 1);
-    sprite.material.opacity = Math.max(0, 1-t*2);
-    if(t>=0.5){
-      clearInterval(anim);
-      sprite.material.opacity=0;
-      spawnIconParticles(sprite.position, sec.color);
-      setTimeout(()=>{ sprite.material.opacity=0.85; sprite.scale.set(startScale,startScale,1); }, 800);
-      showPanel(sec);
-    }
-  },16);
+  // Chercher dans HUB_SECTIONS ET INNER_SECTIONS
+  const sec = HUB_SECTIONS.find(s=>s.id===id) || INNER_SECTIONS.find(s=>s.id===id);
+  if(!sec){ console.warn('[openSection] section introuvable:', id); return; }
+  const startScale = sprite ? sprite.scale.x : 3.0;
+  if(sprite){
+    let t=0;
+    const anim = setInterval(()=>{
+      t+=0.06;
+      sprite.scale.set(startScale*(1+t*3), startScale*(1+t*3), 1);
+      sprite.material.opacity = Math.max(0, 1-t*2);
+      if(t>=0.5){
+        clearInterval(anim);
+        sprite.material.opacity=0;
+        spawnIconParticles(sprite.position, sec.color);
+        setTimeout(()=>{ sprite.material.opacity=0.85; sprite.scale.set(startScale,startScale,1); }, 800);
+        showPanel(sec);
+      }
+    },16);
+  } else {
+    showPanel(sec);
+  }
 }
 
 function spawnIconParticles(pos3d, color){
@@ -2409,6 +2804,28 @@ styleTag.textContent=`
 #hub-panel-content::-webkit-scrollbar{width:4px}
 #hub-panel-content::-webkit-scrollbar-track{background:transparent}
 #hub-panel-content::-webkit-scrollbar-thumb{background:rgba(0,255,255,.2);border-radius:2px}
+
+/* Textes du hub panel — taille minimum lisible */
+#hub-panel-content { font-size: 17px; }
+#hub-panel-content *:not(h1):not(svg):not(canvas):not(iframe):not(img) {
+  font-size: max(0.78rem, 14px) !important;
+  line-height: 1.65 !important;
+}
+#hub-panel-content h1 { font-size: max(1.15rem, 20px) !important; }
+#hub-panel-content pre { font-size: max(0.75rem, 13px) !important; }
+
+/* Modal création de bulle */
+#add-bubble-modal *:not(svg) { font-size: max(0.72rem, 13px) !important; }
+#modal-title { font-size: max(0.85rem, 15px) !important; }
+
+/* Header hub — boutons son/quitter */
+#hub-header * { font-size: max(0.68rem, 13px) !important; }
+#hub-hint { font-size: max(0.6rem, 12px) !important; }
+#hub-add-btn { font-size: max(0.7rem, 13px) !important; }
+#hub-close { font-size: max(0.72rem, 13px) !important; }
+
+/* Login screen */
+#login-screen input, #login-screen button { font-size: max(0.78rem, 14px) !important; }
 `;
 document.head.appendChild(styleTag);
 
@@ -3064,23 +3481,32 @@ function createBubble(){
   const label=document.getElementById('bubble-label').value.trim()||selectedBubbleIcon;
   const {cats, content} = collectBubbleContent();
   const id='custom_'+Date.now();
+  const isInner = insideSphere; // bulle privée si créée depuis l'intérieur
   const newSec={
     id, label, icon:selectedBubbleIcon, color:selectedBubbleColor,
     cats, content, angle:Math.random()*Math.PI*2,
-    elevation:(Math.random()-.5)*7, isCustom:true, render:null
+    elevation:(Math.random()-.5)*7, isCustom:true, isInner, render:null
   };
   newSec.render=()=>renderCustomBubble(newSec);
-  customBubbles.push({id,label,icon:selectedBubbleIcon,color:selectedBubbleColor,cats,content,angle:newSec.angle,elevation:newSec.elevation,isCustom:true});
-  // Sauvegarder dans localStorage EN PREMIER (fiable, immédiat)
+  customBubbles.push({id,label,icon:selectedBubbleIcon,color:selectedBubbleColor,cats,content,angle:newSec.angle,elevation:newSec.elevation,isCustom:true,isInner});
   saveBubblesLocal();
-  HUB_SECTIONS.push(newSec);
-  addIconToHub(newSec, HUB_SECTIONS.length-1);
-  setTimeout(()=>{
-    const sprite = hubIcons[hubIcons.length-1];
-    if(sprite){ spawnBubbleAnim(sprite, selectedBubbleColor); soundBubbleSpawn(); }
-  }, 50);
+
+  if(insideSphere){
+    // Ajouter dans la zone intérieure
+    INNER_SECTIONS.push(newSec);
+    buildInnerIcons(); // reconstruire les bulles intérieures
+    soundBubbleSpawn();
+  } else {
+    // Ajouter dans les anneaux extérieurs
+    HUB_SECTIONS.push(newSec);
+    addIconToHub(newSec, HUB_SECTIONS.length-1);
+    setTimeout(()=>{
+      const sprite = hubIcons[hubIcons.length-1];
+      if(sprite){ spawnBubbleAnim(sprite, selectedBubbleColor); soundBubbleSpawn(); }
+    }, 50);
+  }
   closeBubbleModal(); bubbleFilesMap={};
-  saveCloudData(); // cloud en async, pas bloquant
+  saveCloudData();
 }
 
 function updateBubble(){
@@ -3154,11 +3580,14 @@ function deleteCustomBubble(id){
     overlay.remove();
     closePanel();
 
-    // Trouver le sprite avec protection userData
-    const si = hubIcons.findIndex(s=> s && s.userData && s.userData.id===id);
+    const isInner = insideSphere || innerIcons.some(s=>s&&s.userData&&s.userData.id===id);
+
+    // Trouver le sprite (intérieur ou extérieur)
+    const iconList = isInner ? innerIcons : hubIcons;
+    const si = iconList.findIndex(s=> s && s.userData && s.userData.id===id);
     let spriteColor = '#00ffff';
     if(si >= 0){
-      const sprite = hubIcons[si];
+      const sprite = iconList[si];
       spriteColor = sprite.userData.color || '#00ffff';
       const pos = sprite.position.clone();
       sprite.material.color = new THREE.Color(0xffffff);
@@ -3168,14 +3597,14 @@ function deleteCustomBubble(id){
         let t=0;
         const fadeOut = setInterval(()=>{
           t+=0.1;
-          if(!sprite.userData) { clearInterval(fadeOut); return; }
+          if(!sprite.userData){ clearInterval(fadeOut); return; }
           sprite.material.opacity = Math.max(0, 1-t*1.5);
           sprite.scale.setScalar(sprite.userData.baseScale*(2+t*4));
           if(t>=0.8){
             clearInterval(fadeOut);
             if(hubScene) hubScene.remove(sprite);
-            const idx2 = hubIcons.indexOf(sprite);
-            if(idx2>=0) hubIcons.splice(idx2,1);
+            const idx2 = iconList.indexOf(sprite);
+            if(idx2>=0) iconList.splice(idx2,1);
           }
         }, 16);
       }, 60);
@@ -3192,14 +3621,24 @@ function deleteCustomBubble(id){
     }
 
     setTimeout(()=>{
-      const idx = HUB_SECTIONS.findIndex(s=>s.id===id);
-      if(idx>=0) HUB_SECTIONS.splice(idx,1);
+      // Supprimer de HUB_SECTIONS et INNER_SECTIONS
+      const hsIdx = HUB_SECTIONS.findIndex(s=>s.id===id);
+      if(hsIdx>=0) HUB_SECTIONS.splice(hsIdx,1);
+      const isIdx = INNER_SECTIONS.findIndex(s=>s.id===id);
+      if(isIdx>=0) INNER_SECTIONS.splice(isIdx,1);
+
       customBubbles = customBubbles.filter(b=>b.id!==id);
-      try{ localStorage.setItem('hub_custom_bubbles', JSON.stringify(customBubbles)); }catch(e){}
-      // Reconstruire les anneaux
-      hubIcons.forEach(sp=>{ if(hubScene) hubScene.remove(sp); });
-      hubIcons.length=0;
-      buildHubIcons();
+      saveBubblesLocal();
+
+      if(isInner){
+        // Reconstruire seulement les bulles intérieures
+        buildInnerIcons();
+      } else {
+        // Reconstruire seulement les anneaux extérieurs
+        hubIcons.forEach(sp=>{ if(hubScene) hubScene.remove(sp); });
+        hubIcons.length=0;
+        buildHubIcons();
+      }
       saveCloudData();
     }, 800);
   };
