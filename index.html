@@ -584,6 +584,7 @@ async function saveCloudData(){
   }
 
   const payload = {
+    id:             DATA_ROW_ID,
     custom_bubbles: JSON.stringify(customBubbles),
     sites:          JSON.stringify(load('sites')),
     ideas:          JSON.stringify(load('ideas')),
@@ -593,12 +594,37 @@ async function saveCloudData(){
     updated_at:     new Date().toISOString()
   };
 
+  // Stratégie : PATCH d'abord, si 0 lignes affectées → INSERT
   try {
-    // PATCH sur la ligne existante (méthode confirmée fonctionnelle par le diagnostic)
-    const r = await fetch(
+    const patchRes = await fetch(
       SUPABASE_URL + '/rest/v1/nd_data?id=eq.' + DATA_ROW_ID,
       {
         method: 'PATCH',
+        headers: {
+          'apikey': SUPABASE_ANON,
+          'Authorization': 'Bearer ' + SUPABASE_ANON,
+          'Content-Type': 'application/json',
+          'Prefer': 'return=representation,count=exact'
+        },
+        body: JSON.stringify(payload)
+      }
+    );
+
+    const patchText = await patchRes.text();
+    const patchData = patchText ? JSON.parse(patchText) : [];
+    const rowsAffected = Array.isArray(patchData) ? patchData.length : 0;
+
+    if(patchRes.ok && rowsAffected > 0){
+      // PATCH a bien mis à jour une ligne existante
+      showSaveIndicator('✓ SAUVEGARDÉ · CLOUD');
+      return;
+    }
+
+    // 0 lignes → ligne n'existe pas encore, faire un INSERT
+    const insertRes = await fetch(
+      SUPABASE_URL + '/rest/v1/nd_data',
+      {
+        method: 'POST',
         headers: {
           'apikey': SUPABASE_ANON,
           'Authorization': 'Bearer ' + SUPABASE_ANON,
@@ -609,42 +635,22 @@ async function saveCloudData(){
       }
     );
 
-    if(r.ok || r.status===204){
+    if(insertRes.ok || insertRes.status===201 || insertRes.status===204){
       showSaveIndicator('✓ SAUVEGARDÉ · CLOUD');
-    } else if(r.status===404 || r.status===406){
-      // Ligne inexistante → créer avec POST
-      const r2 = await fetch(
-        SUPABASE_URL + '/rest/v1/nd_data',
-        {
-          method: 'POST',
-          headers: {
-            'apikey': SUPABASE_ANON,
-            'Authorization': 'Bearer ' + SUPABASE_ANON,
-            'Content-Type': 'application/json',
-            'Prefer': 'return=minimal'
-          },
-          body: JSON.stringify({id: DATA_ROW_ID, ...payload})
-        }
-      );
-      if(r2.ok || r2.status===201 || r2.status===204){
-        showSaveIndicator('✓ SAUVEGARDÉ · CLOUD');
-      } else {
-        const t = await r2.text();
-        throw new Error('POST ' + r2.status + ': ' + t.slice(0,100));
-      }
     } else {
-      const t = await r.text();
-      throw new Error('PATCH ' + r.status + ': ' + t.slice(0,100));
+      const t = await insertRes.text();
+      throw new Error('INSERT ' + insertRes.status + ': ' + t.slice(0,120));
     }
+
   } catch(e){
     console.warn('saveCloudData failed:', e.message);
-    showSaveIndicator('⚠ ' + e.message.slice(0,60));
+    showSaveIndicator('⚠ ' + e.message.slice(0,70));
   }
 }
 
 // ── CHARGER depuis Supabase ──
 async function loadCloudData(){
-  if(SUPABASE_URL.includes('COLLE_TON')) return true; // pas encore configuré
+  if(SUPABASE_URL.includes('COLLE_TON')) return true;
 
   try {
     const rows = await sbFetch('GET', 'nd_data?id=eq.'+DATA_ROW_ID+'&limit=1');
@@ -652,28 +658,26 @@ async function loadCloudData(){
       const d = rows[0];
       const parse = (v, fallback=[]) => { try{ return v ? JSON.parse(v) : fallback; }catch{ return fallback; } };
 
+      // Bulles custom
       const cb = parse(d.custom_bubbles);
       if(cb.length) customBubbles = cb;
 
+      // Données texte → localStorage
       const sets = [
-        ['hub_sites',            d.sites],
-        ['hub_ideas',            d.ideas],
-        ['hub_ai',               d.ai_tools],
-        ['hub_recipes',          d.recipes],
-        ['hub_custom_bubbles',   d.custom_bubbles],
+        ['hub_sites',          d.sites],
+        ['hub_ideas',          d.ideas],
+        ['hub_ai',             d.ai_tools],
+        ['hub_recipes',        d.recipes],
+        ['hub_custom_bubbles', d.custom_bubbles],
       ];
       sets.forEach(([key, val])=>{ if(val) localStorage.setItem(key, val); });
 
-      // Charger les photos depuis Supabase (URLs uniquement)
-      if(d.photos){
-        const cloudPhotos = parse(d.photos, []);
-        if(cloudPhotos.length){
-          photoData = cloudPhotos;
-          // Rafraîchir l'affichage si la section photos est ouverte
-          renderPhotos();
-          if(photoPlanetActive) initPhotoPlanet();
-        }
-      }
+      // Photos — toujours écraser avec les données cloud
+      const cloudPhotos = parse(d.photos, []);
+      photoData = cloudPhotos; // même si vide, on fait confiance au cloud
+      // Rafraîchir l'affichage si la section est déjà ouverte
+      if(document.getElementById('photo-grid')) renderPhotos();
+      if(photoPlanetActive) initPhotoPlanet();
     }
   } catch(e){
     console.log('Supabase load failed, using localStorage:', e.message);
