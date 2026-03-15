@@ -591,6 +591,9 @@ async function saveCloudData(){
     ai_tools:       JSON.stringify(load('ai')),
     recipes:        JSON.stringify(load('recipes')),
     photos:         JSON.stringify(photosToSave),
+    cv_pdfs:        JSON.stringify(cvPdfs),
+    lettre_pdfs:    JSON.stringify(lettrePdfs),
+    recipe_pdfs:    JSON.stringify(recipePdfs),
     updated_at:     new Date().toISOString()
   };
 
@@ -658,10 +661,29 @@ async function loadCloudData(){
       const d = rows[0];
       const parse = (v, fallback=[]) => { try{ return v ? JSON.parse(v) : fallback; }catch{ return fallback; } };
 
-      // Bulles custom — cloud gagne SEULEMENT si non vide
+      // Bulles custom — cloud gagne SEULEMENT si non vide ET plus récent
       const cb = parse(d.custom_bubbles);
-      if(cb.length) customBubbles = cb;
-      // sinon garder customBubbles du localStorage (déjà chargé ligne 2733)
+      if(cb.length > 0){
+        // Fusionner : préférer les données cloud pour la structure, mais
+        // conserver les images locales si le cloud les a perdues (base64 trop lourdes)
+        const localBubbles = JSON.parse(localStorage.getItem('hub_custom_bubbles')||'[]');
+        customBubbles = cb.map(cloudB => {
+          const localB = localBubbles.find(l=>l.id===cloudB.id);
+          if(!localB) return cloudB;
+          // Pour chaque cat avec fichiers, prendre local si cloud est vide
+          const content = {...cloudB.content};
+          ['images','gallery','pdfs'].forEach(cat=>{
+            const cloudFiles = cloudB.content?.[cat]||[];
+            const localFiles = localB.content?.[cat]||[];
+            const cloudHasData = cloudFiles.some(f=>f&&f.data&&f.data.length>10);
+            const localHasData = localFiles.some(f=>f&&f.data&&f.data.length>10);
+            if(!cloudHasData && localHasData) content[cat] = localFiles;
+            else content[cat] = cloudFiles;
+          });
+          return {...cloudB, content};
+        });
+      }
+      // si cb vide → garder customBubbles du localStorage (déjà initialisé ligne ~2733)
 
       // Données texte → localStorage seulement si non vides
       const sets = [
@@ -675,13 +697,21 @@ async function loadCloudData(){
         if(val && val !== '[]' && val !== 'null') localStorage.setItem(key, val);
       });
 
-      // Photos — cloud gagne SEULEMENT si non vide
+      // Photos
       const cloudPhotos = parse(d.photos, []);
       if(cloudPhotos.length) photoData = cloudPhotos;
-      // sinon garder photoData actuel
-
       if(document.getElementById('photo-grid')) renderPhotos();
       if(photoPlanetActive) initPhotoPlanet();
+
+      // PDFs — charger seulement si non vides dans le cloud
+      const cloudCvPdfs = parse(d.cv_pdfs, []);
+      if(cloudCvPdfs.length){ cvPdfs = cloudCvPdfs; if(document.getElementById('cv-pdfs-list')) renderCVPdfs(); }
+
+      const cloudLettrePdfs = parse(d.lettre_pdfs, []);
+      if(cloudLettrePdfs.length){ lettrePdfs = cloudLettrePdfs; if(document.getElementById('lettre-pdfs-list')) renderLettrePdfs(); }
+
+      const cloudRecipePdfs = parse(d.recipe_pdfs, []);
+      if(cloudRecipePdfs.length){ recipePdfs = cloudRecipePdfs; if(document.getElementById('recipe-pdfs-list')) renderRecipePdfs(); }
     }
   } catch(e){
     console.log('Supabase load failed, using localStorage:', e.message);
@@ -2657,8 +2687,16 @@ function deleteRecipe(i){ const r=load('recipes'); r.splice(i,1); save('recipes'
 let recipePdfs=[];
 function handleRecipePdfInput(e){ [...e.target.files].forEach(addRecipePdf); }
 function handleRecipePdfDrop(e){ e.preventDefault(); [...e.dataTransfer.files].filter(f=>f.type==='application/pdf').forEach(addRecipePdf); }
-function addRecipePdf(file){ const reader=new FileReader(); reader.onload=ev=>{recipePdfs.push({name:file.name,data:ev.target.result});renderRecipePdfs();}; reader.readAsDataURL(file); }
-function renderRecipePdfs(){ const list=document.getElementById('recipe-pdfs-list'); if(!list)return; if(!recipePdfs.length){list.innerHTML='<div style="font-family:\'Courier New\',monospace;color:rgba(255,140,0,.3);font-size:.7rem;letter-spacing:.15em">Aucun livre PDF</div>';return;} list.innerHTML=recipePdfs.map((p,i)=>`<div style="display:flex;align-items:center;gap:12px;background:rgba(255,140,0,.05);border:1px solid rgba(255,140,0,.15);border-radius:6px;padding:12px 16px;margin-bottom:8px"><span style="font-size:1.4rem">📄</span><div style="flex:1;font-family:'Courier New',monospace;font-size:.75rem;color:#f80">${p.name}</div><a href="${p.data}" download="${p.name}" style="background:rgba(255,140,0,.1);border:1px solid rgba(255,140,0,.3);color:#f80;font-family:'Courier New',monospace;font-size:.55rem;letter-spacing:.15em;padding:5px 10px;cursor:pointer;border-radius:4px;text-decoration:none">↓ TÉLÉCHARGER</a><button onclick="recipePdfs.splice(${i},1);renderRecipePdfs()" style="background:transparent;border:none;color:rgba(255,80,80,.5);cursor:pointer;font-size:.9rem">✕</button></div>`).join(''); }
+function addRecipePdf(file){
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    recipePdfs.push({name:file.name, data:ev.target.result});
+    renderRecipePdfs();
+    saveCloudData();
+  };
+  reader.readAsDataURL(file);
+}
+function renderRecipePdfs(){ const list=document.getElementById('recipe-pdfs-list'); if(!list)return; if(!recipePdfs.length){list.innerHTML='<div style="font-family:\'Courier New\',monospace;color:rgba(255,140,0,.3);font-size:.7rem;letter-spacing:.15em">Aucun livre PDF</div>';return;} list.innerHTML=recipePdfs.map((p,i)=>`<div style="display:flex;align-items:center;gap:12px;background:rgba(255,140,0,.05);border:1px solid rgba(255,140,0,.15);border-radius:6px;padding:12px 16px;margin-bottom:8px"><span style="font-size:1.4rem">📄</span><div style="flex:1;font-family:'Courier New',monospace;font-size:.75rem;color:#f80">${p.name}</div><button onclick="previewPdfData(recipePdfs[${i}].data)" style="background:rgba(255,140,0,.1);border:1px solid rgba(255,140,0,.3);color:#f80;font-family:'Courier New',monospace;font-size:.55rem;letter-spacing:.15em;padding:5px 10px;cursor:pointer;border-radius:4px">👁 APERÇU</button><button onclick="downloadPdf(recipePdfs[${i}])" style="background:rgba(255,140,0,.1);border:1px solid rgba(255,140,0,.3);color:#f80;font-family:'Courier New',monospace;font-size:.55rem;letter-spacing:.15em;padding:5px 10px;cursor:pointer;border-radius:4px">↓ DL</button><button onclick="recipePdfs.splice(${i},1);renderRecipePdfs();saveCloudData()" style="background:transparent;border:none;color:rgba(255,80,80,.5);cursor:pointer;font-size:.9rem">✕</button></div>`).join(''); }
 function switchRecipeTab(tab){ ['list','pdfs'].forEach(t=>{ document.getElementById('rtabcontent-'+t).style.display=t===tab?'block':'none'; const btn=document.getElementById('rtab-'+t); if(btn){btn.style.background=t===tab?'rgba(255,140,0,.15)':'transparent';btn.style.borderColor=t===tab?'rgba(255,140,0,.4)':'rgba(255,140,0,.2)';btn.style.color=t===tab?'#f80':'rgba(255,140,0,.5)';} }); if(tab==='pdfs')renderRecipePdfs(); }
 
 // ── CV ──
@@ -2667,10 +2705,43 @@ function handleCVPdfInput(e){ [...e.target.files].forEach(f=>addPdfTo(f,'cv')); 
 function handleCVPdfDrop(e){ e.preventDefault(); [...e.dataTransfer.files].filter(f=>f.type==='application/pdf').forEach(f=>addPdfTo(f,'cv')); }
 function handleLettrePdfInput(e){ [...e.target.files].forEach(f=>addPdfTo(f,'lettre')); }
 function handleLettrePdfDrop(e){ e.preventDefault(); [...e.dataTransfer.files].filter(f=>f.type==='application/pdf').forEach(f=>addPdfTo(f,'lettre')); }
-function addPdfTo(file,type){ const reader=new FileReader(); reader.onload=ev=>{ if(type==='cv'){cvPdfs.push({name:file.name,data:ev.target.result});renderCVPdfs();}else{lettrePdfs.push({name:file.name,data:ev.target.result});renderLettrePdfs();}; }; reader.readAsDataURL(file); }
+function addPdfTo(file,type){
+  const reader=new FileReader();
+  reader.onload=ev=>{
+    if(type==='cv'){ cvPdfs.push({name:file.name,data:ev.target.result}); renderCVPdfs(); }
+    else           { lettrePdfs.push({name:file.name,data:ev.target.result}); renderLettrePdfs(); }
+    saveCloudData(); // ← sauvegarder dans Supabase
+  };
+  reader.readAsDataURL(file);
+}
 function renderCVPdfs(){ const list=document.getElementById('cv-pdfs-list'); if(!list)return; if(!cvPdfs.length){list.innerHTML='<div style="font-family:\'Courier New\',monospace;color:rgba(255,215,0,.3);font-size:.7rem;letter-spacing:.15em">Aucun CV PDF importé</div>';return;} list.innerHTML=cvPdfs.map((p,i)=>pdfRow(p,i,'cv')).join(''); }
 function renderLettrePdfs(){ const list=document.getElementById('lettre-pdfs-list'); if(!list)return; if(!lettrePdfs.length){list.innerHTML='<div style="font-family:\'Courier New\',monospace;color:rgba(255,215,0,.3);font-size:.7rem;letter-spacing:.15em">Aucune lettre PDF importée</div>';return;} list.innerHTML=lettrePdfs.map((p,i)=>pdfRow(p,i,'lettre')).join(''); }
-function pdfRow(p,i,type){ return `<div style="display:flex;align-items:center;gap:10px;background:rgba(255,215,0,.04);border:1px solid rgba(255,215,0,.14);border-radius:6px;padding:10px 14px;margin-bottom:8px;flex-wrap:wrap"><span style="font-size:1.2rem">📄</span><div style="flex:1;font-family:'Courier New',monospace;font-size:.72rem;color:#ffd700;min-width:80px">${p.name}</div><button onclick="previewPdf('${type}',${i})" style="background:rgba(255,215,0,.08);border:1px solid rgba(255,215,0,.25);color:#ffd700;font-family:'Courier New',monospace;font-size:.55rem;letter-spacing:.12em;padding:5px 10px;cursor:pointer;border-radius:3px">👁 APERÇU</button><a href="${p.data}" download="${p.name}" style="background:rgba(255,215,0,.08);border:1px solid rgba(255,215,0,.25);color:#ffd700;font-family:'Courier New',monospace;font-size:.55rem;letter-spacing:.12em;padding:5px 10px;cursor:pointer;border-radius:3px;text-decoration:none">↓ DL</a><button onclick="${type==='cv'?'cvPdfs':'lettrePdfs'}.splice(${i},1);render${type==='cv'?'CV':'Lettre'}Pdfs()" style="background:transparent;border:none;color:rgba(255,80,80,.45);cursor:pointer;font-size:.85rem">✕</button></div>`; }
+function pdfRow(p,i,type){
+  const arr = type==='cv'?'cvPdfs':'lettrePdfs';
+  const render = type==='cv'?'renderCVPdfs':'renderLettrePdfs';
+  return `<div style="display:flex;align-items:center;gap:10px;background:rgba(255,215,0,.04);border:1px solid rgba(255,215,0,.14);border-radius:6px;padding:10px 14px;margin-bottom:8px;flex-wrap:wrap">
+    <span style="font-size:1.2rem">📄</span>
+    <div style="flex:1;font-family:'Courier New',monospace;font-size:.72rem;color:#ffd700;min-width:80px">${p.name}</div>
+    <button onclick="previewPdfData(${arr}[${i}].data)" style="background:rgba(255,215,0,.08);border:1px solid rgba(255,215,0,.25);color:#ffd700;font-family:'Courier New',monospace;font-size:.55rem;letter-spacing:.12em;padding:5px 10px;cursor:pointer;border-radius:3px">👁 APERÇU</button>
+    <button onclick="downloadPdf(${arr}[${i}])" style="background:rgba(255,215,0,.08);border:1px solid rgba(255,215,0,.25);color:#ffd700;font-family:'Courier New',monospace;font-size:.55rem;letter-spacing:.12em;padding:5px 10px;cursor:pointer;border-radius:3px">↓ DL</button>
+    <button onclick="${arr}.splice(${i},1);${render}();saveCloudData()" style="background:transparent;border:none;color:rgba(255,80,80,.45);cursor:pointer;font-size:.85rem">✕</button>
+  </div>`;
+}
+
+// Ouvre un PDF (base64) dans un nouvel onglet via Blob URL
+function previewPdfData(dataUri){
+  pdfOpenTab(dataUri);
+}
+// Télécharge un PDF
+function downloadPdf(p){
+  const url = pdfBlobUrl(p.data);
+  if(!url) return;
+  const a = document.createElement('a');
+  a.href = url; a.download = p.name;
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a);
+  setTimeout(()=>URL.revokeObjectURL(url), 5000);
+}
 // ── Toggle aperçu PDF bulle custom ──
 function toggleBubPdf(iframeId, dataId){
   const dataEl = document.getElementById(dataId);
@@ -2836,20 +2907,30 @@ const CAT_TITLE_STYLE = ["font-family:'Courier New',monospace",'font-size:.52rem
 
 function makeFileInput(id, multiple, accept, cat){
   const wrap = document.createElement('div');
+
+  // Zone cliquable
   const lbl = document.createElement('label');
-  lbl.style.cssText = LABEL_STYLE;
+  lbl.htmlFor = id; // lie le label à l'input par ID — pas de double click
+  lbl.style.cssText = LABEL_STYLE + ';display:block';
   lbl.textContent = 'Cliquer pour sélectionner';
+
+  // Input caché
   const inp = document.createElement('input');
   inp.id = id; inp.type='file'; inp.style.display='none';
-  if(multiple) inp.multiple=true;
-  inp.accept=accept;
-  inp.addEventListener('change',()=>loadBubbleFiles(inp,cat));
-  lbl.appendChild(inp);
-  lbl.addEventListener('click',()=>inp.click());
+  if(multiple) inp.multiple = true;
+  inp.accept = accept;
+  inp.addEventListener('change', e => {
+    if(e.target.files.length > 0) loadBubbleFiles(inp, cat);
+  });
+
+  // Preview text — ID = id + '-preview' pour matcher loadBubbleFiles
   const prev = document.createElement('div');
-  prev.id = id+'-preview';
-  prev.style.cssText = "font-family:'Courier New',monospace;font-size:.55rem;color:rgba(0,255,255,.4);margin-top:5px";
-  wrap.appendChild(lbl); wrap.appendChild(prev);
+  prev.id = id + '-preview';
+  prev.style.cssText = "font-family:'Courier New',monospace;font-size:.55rem;color:rgba(0,255,255,.5);margin-top:6px;min-height:14px";
+
+  wrap.appendChild(lbl);
+  wrap.appendChild(inp);
+  wrap.appendChild(prev);
   return wrap;
 }
 
@@ -2906,7 +2987,9 @@ async function loadBubbleFiles(input, cat){
   const files = [...input.files];
   if(!files.length) return;
 
-  const prev = document.getElementById('binp-'+cat+'-file-preview');
+  // L'ID du preview = id_input + '-preview' — ex: 'binp-images-file-preview'
+  const inputId = 'binp-' + cat + '-file';
+  const prev = document.getElementById(inputId + '-preview');
   if(prev) prev.textContent = '⏳ Chargement...';
 
   const isPdf = cat === 'pdfs';
@@ -2956,6 +3039,26 @@ function collectBubbleContent(){
   return {cats, content};
 }
 
+// Sauvegarde les bulles dans localStorage (toujours disponible, même offline)
+function saveBubblesLocal(){
+  try {
+    localStorage.setItem('hub_custom_bubbles', JSON.stringify(customBubbles));
+  } catch(e){
+    // localStorage plein (images trop lourdes) → sauvegarder sans les images
+    console.warn('localStorage full, saving bubbles without images');
+    const light = customBubbles.map(b=>({
+      ...b,
+      content: b.content ? {
+        ...b.content,
+        images:  (b.content.images  ||[]).map(i=>({...i, data:''})),
+        gallery: (b.content.gallery ||[]).map(i=>({...i, data:''})),
+        pdfs:    (b.content.pdfs    ||[]).map(i=>({...i, data:''})),
+      } : {}
+    }));
+    try { localStorage.setItem('hub_custom_bubbles', JSON.stringify(light)); } catch(e2){}
+  }
+}
+
 function createBubble(){
   const label=document.getElementById('bubble-label').value.trim()||selectedBubbleIcon;
   const {cats, content} = collectBubbleContent();
@@ -2967,7 +3070,8 @@ function createBubble(){
   };
   newSec.render=()=>renderCustomBubble(newSec);
   customBubbles.push({id,label,icon:selectedBubbleIcon,color:selectedBubbleColor,cats,content,angle:newSec.angle,elevation:newSec.elevation,isCustom:true});
-  try{ localStorage.setItem('hub_custom_bubbles',JSON.stringify(customBubbles)); } catch(e){ console.warn('localStorage full'); }
+  // Sauvegarder dans localStorage EN PREMIER (fiable, immédiat)
+  saveBubblesLocal();
   HUB_SECTIONS.push(newSec);
   addIconToHub(newSec, HUB_SECTIONS.length-1);
   setTimeout(()=>{
@@ -2975,7 +3079,7 @@ function createBubble(){
     if(sprite){ spawnBubbleAnim(sprite, selectedBubbleColor); soundBubbleSpawn(); }
   }, 50);
   closeBubbleModal(); bubbleFilesMap={};
-  saveCloudData();
+  saveCloudData(); // cloud en async, pas bloquant
 }
 
 function updateBubble(){
@@ -2993,7 +3097,7 @@ function updateBubble(){
     if(cats.includes('gallery')&& (!bubbleFilesMap['gallery']||!bubbleFilesMap['gallery'].length)) content.gallery = existing.content?.gallery || [];
 
     customBubbles[idx] = {...customBubbles[idx], label, icon:selectedBubbleIcon, color:selectedBubbleColor, cats, content};
-    try{ localStorage.setItem('hub_custom_bubbles',JSON.stringify(customBubbles)); } catch(e){ console.warn('localStorage full'); }
+    saveBubblesLocal(); // localStorage immédiat
   }
 
   // Mettre à jour HUB_SECTIONS
