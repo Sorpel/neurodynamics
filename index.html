@@ -1673,9 +1673,9 @@ function isVisibleForRole(id){
   return !hiddenFromVisitor.has(id);
 }
 
-// Filtre les sections visibles selon le rôle — AISA est toujours intérieure
+// Filtre les sections visibles selon le rôle — AISA et codelab sont toujours intérieures
 function getVisibleSections(){
-  return HUB_SECTIONS.filter(s => s.id !== 'aisa' && isVisibleForRole(s.id));
+  return HUB_SECTIONS.filter(s => s.id !== 'aisa' && s.id !== 'codelab' && isVisibleForRole(s.id));
 }
 
 // ══════════════════════════════════════════════
@@ -2061,6 +2061,9 @@ function initInnerSections(){
   // AISA est toujours ici
   const aisaSec = HUB_SECTIONS.find(s=>s.id==='aisa');
   if(aisaSec && !INNER_SECTIONS.find(s=>s.id==='aisa')) INNER_SECTIONS.push(aisaSec);
+  // Code Lab est dans la zone privée
+  const codelabSec = HUB_SECTIONS.find(s=>s.id==='codelab');
+  if(codelabSec && !INNER_SECTIONS.find(s=>s.id==='codelab')) INNER_SECTIONS.push(codelabSec);
   // Bulles custom marquées 'inner' (isInner:true)
   customBubbles.filter(b=>b.isInner).forEach(b=>{
     if(!INNER_SECTIONS.find(s=>s.id===b.id)){
